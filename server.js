@@ -141,7 +141,7 @@ app.post('/api/send-email', emailLimiter, async (req, res) => {
 
     // Email options
     const mailOptions = {
-      from: from || `${process.env.FROM_NAME || 'Otazumi'} <${process.env.SMTP_USER}>`,
+      from: from || `${process.env.FROM_NAME || 'Otazumi'} <${process.env.FROM_EMAIL}>`,
       to,
       subject,
       html: html || text,
