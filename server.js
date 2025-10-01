@@ -90,6 +90,32 @@ const setupTransporter = () => {
 
 setupTransporter();
 
+// Root endpoint - API documentation
+app.get('/', (req, res) => {
+  res.json({
+    service: 'Otazumi Email Server',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      'GET /': 'API documentation (this page)',
+      'GET /health': 'Health check endpoint',
+      'POST /api/send-email': 'Send email endpoint'
+    },
+    usage: {
+      method: 'POST',
+      url: '/api/send-email',
+      body: {
+        to: 'recipient@example.com',
+        subject: 'Email subject',
+        html: '<h1>HTML content</h1>',
+        text: 'Plain text content (optional)'
+      }
+    },
+    provider: process.env.EMAIL_PROVIDER || 'gmail',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
