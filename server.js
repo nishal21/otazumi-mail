@@ -39,28 +39,29 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Add explicit CORS headers for Vercel
+// Add explicit CORS headers for Vercel (must be before routes)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  
+  // Always set CORS headers
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   } else {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type, Authorization, Accept, Origin');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
-  // Handle preflight
+  // Handle preflight OPTIONS request immediately
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    console.log('✅ Handling OPTIONS preflight for:', req.url);
+    return res.status(200).end();
   }
+  
   next();
 });
-
-// Handle preflight requests
-app.options('*', cors(corsOptions));
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
