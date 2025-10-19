@@ -10,19 +10,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// In-memory store for short-lived OAuth PKCE sessions (state -> { codeVerifier, redirectUri, expiresAt })
-// In production use a persistent store (Redis) to survive restarts and scale across instances.
-const oauthSessions = new Map();
-const OAUTH_SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-// Periodic cleanup of expired oauth sessions
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, val] of oauthSessions.entries()) {
-    if (val.expiresAt <= now) oauthSessions.delete(key);
-  }
-}, 60 * 1000);
-
 // Security middleware
 app.use(helmet());
 
@@ -155,17 +142,15 @@ setupTransporter();
 // Root endpoint - API documentation
 app.get('/', (req, res) => {
   res.json({
-    service: 'Otazumi Email & OAuth Server',
-    version: '1.1.0',
+    service: 'Otazumi Email Server',
+    version: '1.0.0',
     status: 'running',
     endpoints: {
       'GET /': 'API documentation (this page)',
       'GET /health': 'Health check endpoint',
-      'POST /api/send-email': 'Send email endpoint',
-      'POST /api/oauth/anilist/token': 'Exchange AniList OAuth code for token',
-      'POST /api/oauth/mal/token': 'Exchange MyAnimeList OAuth code for token'
+      'POST /api/send-email': 'Send email endpoint'
     },
-    email: {
+    usage: {
       method: 'POST',
       url: '/api/send-email',
       body: {
@@ -173,25 +158,6 @@ app.get('/', (req, res) => {
         subject: 'Email subject',
         html: '<h1>HTML content</h1>',
         text: 'Plain text content (optional)'
-      }
-    },
-    oauth: {
-      anilist: {
-        method: 'POST',
-        url: '/api/oauth/anilist/token',
-        body: {
-          code: 'authorization_code_from_anilist',
-          redirectUri: 'https://yourdomain.com/auth/anilist/callback'
-        }
-      },
-      myanimelist: {
-        method: 'POST',
-        url: '/api/oauth/mal/token',
-        body: {
-          code: 'authorization_code_from_mal',
-          codeVerifier: 'pkce_code_verifier',
-          redirectUri: 'https://yourdomain.com/auth/mal/callback'
-        }
       }
     },
     provider: process.env.EMAIL_PROVIDER || 'gmail',
@@ -264,165 +230,6 @@ app.post('/api/send-email', emailLimiter, async (req, res) => {
       error: 'Failed to send email',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
-  }
-});
-
-// OAuth endpoints for external platform authentication
-app.post('/api/oauth/anilist/token', async (req, res) => {
-  try {
-    const { code, redirectUri } = req.body;
-
-    if (!code || !redirectUri) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: code and redirectUri',
-      });
-    }
-
-    console.log('🔄 Exchanging AniList authorization code for token...');
-
-    const tokenResponse = await fetch('https://anilist.co/api/v2/oauth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        client_id: process.env.ANILIST_CLIENT_ID,
-        client_secret: process.env.ANILIST_CLIENT_SECRET,
-        redirect_uri: redirectUri,
-        code: code,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.text();
-      console.error('❌ AniList token exchange failed:', errorData);
-      return res.status(tokenResponse.status).json({
-        success: false,
-        error: 'Failed to exchange authorization code',
-      });
-    }
-
-    const tokenData = await tokenResponse.json();
-    console.log('✅ AniList token exchange successful');
-
-    res.json({
-      success: true,
-      ...tokenData,
-    });
-  } catch (error) {
-    console.error('❌ AniList OAuth error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error during OAuth token exchange',
-    });
-  }
-});
-
-app.post('/api/oauth/mal/token', async (req, res) => {
-  try {
-    const { code, state } = req.body;
-
-    if (!code || !state) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: code and state',
-      });
-    }
-
-    // Lookup stored PKCE session by state
-    const session = oauthSessions.get(state);
-    if (!session) {
-      console.error('[OAuth][MAL] Missing or expired PKCE session for state:', state);
-      return res.status(400).json({ success: false, error: 'Invalid or expired OAuth state' });
-    }
-
-    const { codeVerifier, redirectUri } = session;
-
-    console.log('🔄 Exchanging MyAnimeList authorization code for token... (server-side PKCE)');
-    console.debug('[OAuth][MAL] safe log:', { codePresent: !!code, redirectUri, codeVerifierPresent: !!codeVerifier });
-
-    const tokenResponse = await fetch('https://myanimelist.net/v1/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.MAL_CLIENT_ID,
-        client_secret: process.env.MAL_CLIENT_SECRET,
-        grant_type: 'authorization_code',
-        code: code,
-        redirect_uri: redirectUri,
-        code_verifier: codeVerifier,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.text();
-      console.error('❌ MyAnimeList token exchange failed:', errorData);
-      console.debug('[OAuth][MAL] token endpoint response:', errorData);
-      return res.status(tokenResponse.status).json({ success: false, error: 'Failed to exchange authorization code' });
-    }
-
-    const tokenData = await tokenResponse.json();
-    console.log('✅ MyAnimeList token exchange successful');
-
-    // Clean up session after successful exchange
-    oauthSessions.delete(state);
-
-    res.json({ success: true, ...tokenData });
-  } catch (error) {
-    console.error('❌ MyAnimeList OAuth error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error during OAuth token exchange' });
-  }
-});
-
-// Start MAL OAuth - create PKCE session and return authorize URL + state
-app.post('/api/oauth/mal/start', (req, res) => {
-  try {
-    const { redirectUri } = req.body;
-    if (!redirectUri) return res.status(400).json({ success: false, error: 'Missing redirectUri' });
-
-    // Generate state and code verifier
-    const state = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    const codeVerifier = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-
-    const encoder = new TextEncoder();
-    crypto.subtle.digest('SHA-256', encoder.encode(codeVerifier)).then((hash) => {
-      const challenge = btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-      // Store session
-      oauthSessions.set(state, { codeVerifier, redirectUri, expiresAt: Date.now() + OAUTH_SESSION_TTL_MS });
-
-      // AniList/MAL authorize URL (MAL uses v1/oauth2/authorize)
-      const authorizeUrl = `https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=${process.env.MAL_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&code_challenge=${challenge}&code_challenge_method=S256`;
-
-      res.json({ success: true, state, authorizeUrl });
-    }).catch(err => {
-      console.error('[OAuth][MAL] PKCE generation error:', err);
-      res.status(500).json({ success: false, error: 'Failed to generate PKCE challenge' });
-    });
-  } catch (err) {
-    console.error('[OAuth][MAL] start error:', err);
-    res.status(500).json({ success: false, error: 'Internal server error' });
-  }
-});
-
-// Start AniList OAuth for parity
-app.post('/api/oauth/anilist/start', (req, res) => {
-  try {
-    const { redirectUri } = req.body;
-    if (!redirectUri) return res.status(400).json({ success: false, error: 'Missing redirectUri' });
-
-    const state = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    oauthSessions.set(state, { redirectUri, expiresAt: Date.now() + OAUTH_SESSION_TTL_MS });
-
-    const authorizeUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=${process.env.ANILIST_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
-
-    res.json({ success: true, state, authorizeUrl });
-  } catch (err) {
-    console.error('[OAuth][AniList] start error:', err);
-    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
