@@ -142,15 +142,17 @@ setupTransporter();
 // Root endpoint - API documentation
 app.get('/', (req, res) => {
   res.json({
-    service: 'Otazumi Email Server',
-    version: '1.0.0',
+    service: 'Otazumi Email & OAuth Server',
+    version: '1.1.0',
     status: 'running',
     endpoints: {
       'GET /': 'API documentation (this page)',
       'GET /health': 'Health check endpoint',
-      'POST /api/send-email': 'Send email endpoint'
+      'POST /api/send-email': 'Send email endpoint',
+      'POST /api/oauth/anilist/token': 'Exchange AniList OAuth code for token',
+      'POST /api/oauth/mal/token': 'Exchange MyAnimeList OAuth code for token'
     },
-    usage: {
+    email: {
       method: 'POST',
       url: '/api/send-email',
       body: {
@@ -158,6 +160,25 @@ app.get('/', (req, res) => {
         subject: 'Email subject',
         html: '<h1>HTML content</h1>',
         text: 'Plain text content (optional)'
+      }
+    },
+    oauth: {
+      anilist: {
+        method: 'POST',
+        url: '/api/oauth/anilist/token',
+        body: {
+          code: 'authorization_code_from_anilist',
+          redirectUri: 'https://yourdomain.com/auth/anilist/callback'
+        }
+      },
+      myanimelist: {
+        method: 'POST',
+        url: '/api/oauth/mal/token',
+        body: {
+          code: 'authorization_code_from_mal',
+          codeVerifier: 'pkce_code_verifier',
+          redirectUri: 'https://yourdomain.com/auth/mal/callback'
+        }
       }
     },
     provider: process.env.EMAIL_PROVIDER || 'gmail',
@@ -229,6 +250,113 @@ app.post('/api/send-email', emailLimiter, async (req, res) => {
       success: false,
       error: 'Failed to send email',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+});
+
+// OAuth endpoints for external platform authentication
+app.post('/api/oauth/anilist/token', async (req, res) => {
+  try {
+    const { code, redirectUri } = req.body;
+
+    if (!code || !redirectUri) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: code and redirectUri',
+      });
+    }
+
+    console.log('🔄 Exchanging AniList authorization code for token...');
+
+    const tokenResponse = await fetch('https://anilist.co/api/v2/oauth/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: process.env.ANILIST_CLIENT_ID,
+        client_secret: process.env.ANILIST_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        code: code,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error('❌ AniList token exchange failed:', errorData);
+      return res.status(tokenResponse.status).json({
+        success: false,
+        error: 'Failed to exchange authorization code',
+      });
+    }
+
+    const tokenData = await tokenResponse.json();
+    console.log('✅ AniList token exchange successful');
+
+    res.json({
+      success: true,
+      ...tokenData,
+    });
+  } catch (error) {
+    console.error('❌ AniList OAuth error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during OAuth token exchange',
+    });
+  }
+});
+
+app.post('/api/oauth/mal/token', async (req, res) => {
+  try {
+    const { code, codeVerifier, redirectUri } = req.body;
+
+    if (!code || !codeVerifier || !redirectUri) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: code, codeVerifier, and redirectUri',
+      });
+    }
+
+    console.log('🔄 Exchanging MyAnimeList authorization code for token...');
+
+    const tokenResponse = await fetch('https://myanimelist.net/v1/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: process.env.MAL_CLIENT_ID,
+        client_secret: process.env.MAL_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error('❌ MyAnimeList token exchange failed:', errorData);
+      return res.status(tokenResponse.status).json({
+        success: false,
+        error: 'Failed to exchange authorization code',
+      });
+    }
+
+    const tokenData = await tokenResponse.json();
+    console.log('✅ MyAnimeList token exchange successful');
+
+    res.json({
+      success: true,
+      ...tokenData,
+    });
+  } catch (error) {
+    console.error('❌ MyAnimeList OAuth error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during OAuth token exchange',
     });
   }
 });
