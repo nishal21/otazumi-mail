@@ -320,8 +320,16 @@ app.post('/api/oauth/mal/token', async (req, res) => {
     }
 
     console.log('🔄 Exchanging MyAnimeList authorization code for token...');
+      // DEBUG: Log incoming exchange parameters (avoid printing secrets)
+      console.debug('[OAuth][MAL] incoming exchange body safe log:', {
+        code: code,
+        redirectUri: redirectUri,
+        codeVerifierPresent: !!codeVerifier
+      });
 
-    const tokenResponse = await fetch('https://myanimelist.net/v1/oauth2/token', {
+      // Forward the token exchange request to MyAnimeList
+      console.debug('[OAuth][MAL] POSTing to MAL token endpoint');
+      const tokenResponse = await fetch('https://myanimelist.net/v1/oauth2/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -339,6 +347,8 @@ app.post('/api/oauth/mal/token', async (req, res) => {
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text();
       console.error('❌ MyAnimeList token exchange failed:', errorData);
+      // DEBUG: include full response for debugging (do not expose to clients)
+      console.debug('[OAuth][MAL] token endpoint response:', errorData);
       return res.status(tokenResponse.status).json({
         success: false,
         error: 'Failed to exchange authorization code',
